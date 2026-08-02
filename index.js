@@ -46,7 +46,7 @@ async function postAlert(quest) {
       { name: 'Reward',   value: reward,                                    inline: true  },
       { name: 'Deadline', value: expiry ? discordTimestamp(expiry) : 'N/A', inline: false },
     ],
-    footer: { text: 'Discord Quest Alert' },
+    footer: { text: `Quest ID: ${id}` },
     timestamp: new Date().toISOString(),
   };
 
