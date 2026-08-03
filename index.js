@@ -1,5 +1,6 @@
 // node index.js --check
-// node index.js --debug
+// node index.js --check --debug
+// node index.js --test
 
 require('dotenv').config();
 const express = require('express');
@@ -7,6 +8,7 @@ const { Redis } = require('@upstash/redis');
 
 const CHECK_ONLY = process.argv.includes('--check');
 const DEBUG      = process.argv.includes('--debug');
+const TEST_SEND  = process.argv.includes('--test');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,7 +23,7 @@ const DISCORD_API = 'https://discord.com/api/v9';
 const SEEN_KEY = 'discord_quest_alert:seen';
 const BLURPLE = 0x5865f2;
 
-if (!CHECK_ONLY) {
+if (!CHECK_ONLY && !TEST_SEND) {
   // Keep-alive endpoint pinged by Uptime Robot
   app.get('/', (_req, res) => res.send('Discord Quest Alert is running.'));
   app.listen(PORT, () => console.log(`[${ts()}] Server on port ${PORT}`));
@@ -43,12 +45,16 @@ async function postAlert(quest) {
   const name    = config.messages?.quest_name;
   const reward  = config.rewards_config?.rewards?.[0]?.messages?.name ?? 'Unknown Reward';
   const expiry  = config.expires_at;
+  const color   = config.colors?.primary
+    ? parseInt(config.colors.primary.replace('#', ''), 16)
+    : BLURPLE;
+  const hero    = config.assets?.hero;
 
   const embed = {
-    title: '🎮 New Discord Quest Available!',
-    ...(name && { description: `**${name}**` }),
+    ...(name && { title: name }),
     url: `https://discord.com/quests/${id}`,
-    color: BLURPLE,
+    color,
+    ...(hero && { image: { url: `https://cdn.discordapp.com/${hero}` } }),
     fields: [
       { name: 'Game',     value: game,                                      inline: true  },
       { name: 'Reward',   value: reward,                                    inline: true  },
@@ -128,8 +134,34 @@ async function checkQuests(dryRun = false) {
   }
 }
 
+async function testSend() {
+  const res = await fetch(`${DISCORD_API}/quests/@me`, {
+    headers: {
+      Authorization: process.env.USER_TOKEN,
+      'X-Super-Properties': process.env.X_SUPER_PROPERTIES,
+      'X-Discord-Locale': 'en-US',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+    },
+  });
+
+  if (!res.ok) { console.error(`[${ts()}] Quest API returned ${res.status}`); return; }
+
+  const { quests = [] } = await res.json();
+  const now    = Date.now();
+  const active = quests.filter(q => !q.config?.expires_at || new Date(q.config.expires_at).getTime() > now);
+
+  if (active.length === 0) { console.log(`[${ts()}] No active quests to test with.`); return; }
+
+  const quest = active[Math.floor(Math.random() * active.length)];
+  console.log(`[${ts()}] Sending test alert for: ${quest.config?.messages?.quest_name} (id: ${quest.id})`);
+  await postAlert(quest);
+  console.log(`[${ts()}] Test alert sent.`);
+}
+
 if (CHECK_ONLY) {
   checkQuests(true);
+} else if (TEST_SEND) {
+  testSend().catch(err => console.error(`[${ts()}] Error:`, err.message));
 } else {
   checkQuests();
   setInterval(checkQuests, POLL_MS);
