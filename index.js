@@ -1,6 +1,12 @@
+// node index.js --check
+// node index.js --debug
+
 require('dotenv').config();
 const express = require('express');
 const { Redis } = require('@upstash/redis');
+
+const CHECK_ONLY = process.argv.includes('--check');
+const DEBUG      = process.argv.includes('--debug');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,9 +21,11 @@ const DISCORD_API = 'https://discord.com/api/v9';
 const SEEN_KEY = 'discord_quest_alert:seen';
 const BLURPLE = 0x5865f2;
 
-// Keep-alive endpoint pinged by Uptime Robot
-app.get('/', (_req, res) => res.send('Discord Quest Alert is running.'));
-app.listen(PORT, () => console.log(`[${ts()}] Server on port ${PORT}`));
+if (!CHECK_ONLY) {
+  // Keep-alive endpoint pinged by Uptime Robot
+  app.get('/', (_req, res) => res.send('Discord Quest Alert is running.'));
+  app.listen(PORT, () => console.log(`[${ts()}] Server on port ${PORT}`));
+}
 
 function ts() {
   return new Date().toISOString();
@@ -59,7 +67,7 @@ async function postAlert(quest) {
   if (!res.ok) throw new Error(`Webhook POST failed with status ${res.status}`);
 }
 
-async function checkQuests() {
+async function checkQuests(dryRun = false) {
   try {
     const res = await fetch(`${DISCORD_API}/quests/@me`, {
       headers: { Authorization: process.env.USER_TOKEN },
@@ -70,7 +78,30 @@ async function checkQuests() {
       return;
     }
 
-    const { quests = [] } = await res.json();
+    const body = await res.json();
+
+    if (DEBUG) {
+      console.log(`[${ts()}] Raw API response:`);
+      console.log(JSON.stringify(body, null, 2));
+    }
+
+    const { quests = [] } = body;
+
+    if (dryRun) {
+      if (quests.length === 0) {
+        console.log(`[${ts()}] No active quests found.`);
+        return;
+      }
+      console.log(`[${ts()}] ${quests.length} active quest(s):`);
+      for (const quest of quests) {
+        const game   = quest.config?.messages?.game_title ?? 'Unknown Game';
+        const name   = quest.config?.messages?.quest_name ?? 'Unknown Quest';
+        const reward = quest.config?.rewards_config?.rewards?.[0]?.messages?.name ?? 'Unknown Reward';
+        const expiry = quest.config?.expires_at ?? 'N/A';
+        console.log(`  • [${quest.id}] ${game} — ${name} | Reward: ${reward} | Expires: ${expiry}`);
+      }
+      return;
+    }
 
     const seenIds  = new Set(await redis.smembers(SEEN_KEY));
     const newQuests = quests.filter(q => !seenIds.has(q.id));
@@ -90,5 +121,9 @@ async function checkQuests() {
   }
 }
 
-checkQuests();
-setInterval(checkQuests, POLL_MS);
+if (CHECK_ONLY) {
+  checkQuests(true);
+} else {
+  checkQuests();
+  setInterval(checkQuests, POLL_MS);
+}
