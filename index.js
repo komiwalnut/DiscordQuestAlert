@@ -70,7 +70,12 @@ async function postAlert(quest) {
 async function checkQuests(dryRun = false) {
   try {
     const res = await fetch(`${DISCORD_API}/quests/@me`, {
-      headers: { Authorization: process.env.USER_TOKEN },
+      headers: {
+        Authorization: process.env.USER_TOKEN,
+        'X-Super-Properties': process.env.X_SUPER_PROPERTIES,
+        'X-Discord-Locale': 'en-US',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+      },
     });
 
     if (!res.ok) {
@@ -87,13 +92,16 @@ async function checkQuests(dryRun = false) {
 
     const { quests = [] } = body;
 
+    const now    = Date.now();
+    const active = quests.filter(q => !q.config?.expires_at || new Date(q.config.expires_at).getTime() > now);
+
     if (dryRun) {
-      if (quests.length === 0) {
+      if (active.length === 0) {
         console.log(`[${ts()}] No active quests found.`);
         return;
       }
-      console.log(`[${ts()}] ${quests.length} active quest(s):`);
-      for (const quest of quests) {
+      console.log(`[${ts()}] ${active.length} active quest(s) (${quests.length - active.length} expired hidden):`);
+      for (const quest of active) {
         const game   = quest.config?.messages?.game_title ?? 'Unknown Game';
         const name   = quest.config?.messages?.quest_name ?? 'Unknown Quest';
         const reward = quest.config?.rewards_config?.rewards?.[0]?.messages?.name ?? 'Unknown Reward';
@@ -102,9 +110,8 @@ async function checkQuests(dryRun = false) {
       }
       return;
     }
-
     const seenIds  = new Set(await redis.smembers(SEEN_KEY));
-    const newQuests = quests.filter(q => !seenIds.has(q.id));
+    const newQuests = active.filter(q => !seenIds.has(q.id));
 
     for (const quest of newQuests) {
       await postAlert(quest);
@@ -115,7 +122,7 @@ async function checkQuests(dryRun = false) {
       await redis.sadd(SEEN_KEY, ...newQuests.map(q => q.id));
     }
 
-    console.log(`[${ts()}] Checked — ${quests.length} active, ${newQuests.length} new`);
+    console.log(`[${ts()}] Checked — ${active.length} active (${quests.length - active.length} expired), ${newQuests.length} new`);
   } catch (err) {
     console.error(`[${ts()}] Error:`, err.message);
   }
